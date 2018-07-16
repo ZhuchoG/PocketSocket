@@ -558,6 +558,7 @@
     }];
 }
 - (void)driver:(PSWebSocketDriver *)driver didReceivePong:(NSData *)pong {
+    _lastPong = [[NSDate date] timeIntervalSinceReferenceDate];
     void (^handler)(NSData *pong) = [_pingHandlers firstObject];
     if(handler) {
         [self executeDelegate:^{

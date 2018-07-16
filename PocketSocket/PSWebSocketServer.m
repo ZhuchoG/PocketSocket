@@ -34,6 +34,8 @@ typedef NS_ENUM(NSInteger, PSWebSocketServerConnectionReadyState) {
     PSWebSocketServerConnectionReadyStateClosed
 };
 
+static const NSTimeInterval connectionLostTimeout = 60;
+
 @interface PSWebSocketServerConnection : NSObject
 
 @property (nonatomic, strong, readonly) NSString *identifier;
@@ -82,7 +84,10 @@ void PSWebSocketServerAcceptCallback(CFSocketRef s, CFSocketCallBackType type, C
     NSMutableSet *_webSockets;
 }
 @end
-@implementation PSWebSocketServer
+
+@implementation PSWebSocketServer {
+    NSTimer *_connectionLostTimer;
+}
 
 #pragma mark - Properties
 
@@ -166,7 +171,7 @@ void PSWebSocketServerAcceptCallback(CFSocketRef s, CFSocketCallBackType type, C
                              &_socketContext);
     // configure socket
     int yes = 1;
-    setsockopt(CFSocketGetNative(_socket), SOL_SOCKET, SO_REUSEADDR, (void *)&yes, sizeof(yes));
+    setsockopt(CFSocketGetNative(_socket), SOL_SOCKET, 0, (void *)&yes, sizeof(yes));
     
     // bind
     CFSocketError err = CFSocketSetAddress(_socket, (__bridge CFDataRef)_addrData);
@@ -193,6 +198,8 @@ void PSWebSocketServerAcceptCallback(CFSocketRef s, CFSocketCallBackType type, C
     if(!silent) {
         [self notifyDelegateDidStart];
     }
+    
+    [self restartConnectionTimer];
 }
 - (void)disconnectGracefully:(BOOL)silent {
     if(!_running) {
@@ -235,6 +242,28 @@ void PSWebSocketServerAcceptCallback(CFSocketRef s, CFSocketCallBackType type, C
     
     if(!silent) {
         [self notifyDelegateDidStop];
+    }
+}
+
+- (void)restartConnectionTimer {
+    [_connectionLostTimer invalidate];
+    
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(connectionLostTimeout * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        _connectionLostTimer = [NSTimer scheduledTimerWithTimeInterval:connectionLostTimeout repeats:YES block:^(NSTimer * _Nonnull timer) {
+            [self pingConnections];
+        }];
+    });
+}
+
+- (void)pingConnections {
+    NSTimeInterval current = [[NSDate date] timeIntervalSinceReferenceDate] - connectionLostTimeout*1.5;
+    NSSet *connections = [_webSockets copy];
+    for (PSWebSocket *connection in connections) {
+        if (connection.lastPong < current) {
+            [connection closeWithCode:1006 reason:@"The connection was closed because the other endpoint did not respond with a pong in time."];
+        } else {
+            [connection ping:[NSData new] handler:nil];
+        }
     }
 }
 
